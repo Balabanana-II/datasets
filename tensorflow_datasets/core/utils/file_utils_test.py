@@ -13,8 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for file_utils."""
-
 import os
 import time
 from unittest import mock
@@ -23,14 +21,146 @@ from absl.testing import flagsaver
 from etils import epath
 import pytest
 from tensorflow_datasets import testing
+from tensorflow_datasets.core import constants
 from tensorflow_datasets.core import naming
 from tensorflow_datasets.core.utils import file_utils
 from tensorflow_datasets.core.utils import read_config
+
+_DATASET = 'mnist'
+_VERSION = '1.0.0'
 
 
 def test_default_data_dir():
   data_dir = file_utils.get_default_data_dir(given_data_dir=None)
   assert data_dir
+
+
+def _create_data_dir(
+    version: str = '1.0.0', data_dir_root: epath.Path | None = None
+) -> epath.Path:
+  data_dir = file_utils.get_data_dir(
+      dataset=_DATASET,
+      config=None,
+      version=version,
+      data_dir_root=data_dir_root,
+  )
+  data_dir.mkdir(parents=True, exist_ok=True)
+  return data_dir
+
+
+@pytest.fixture(name='default_data_dir_root')
+def mock_default_data_dir_root(monkeypatch, tmp_path):
+  default_data_dir_root = tmp_path / 'data_dir'
+  monkeypatch.setattr(constants, 'DATA_DIR', default_data_dir_root)
+  return default_data_dir_root
+
+
+@pytest.fixture(name='other_data_dir_root')
+def mock_other_data_dir_root(default_data_dir_root):
+  return default_data_dir_root.parent / 'other_data_dir'
+
+
+def test_get_data_dir_root(default_data_dir_root: epath.Path):
+  # No data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET, config=None, version=_VERSION, data_dir=None
+  )
+  # -> use default data_dir
+  assert data_dir_root == default_data_dir_root
+
+
+def test_get_data_dir_root_explicit(other_data_dir_root: epath.Path):
+  # data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET,
+      config=None,
+      version=_VERSION,
+      data_dir=other_data_dir_root,
+  )
+  # -> use data_dir
+  assert data_dir_root == other_data_dir_root
+
+
+def test_get_data_dir_root_multi_dir(
+    default_data_dir_root: epath.Path, other_data_dir_root: epath.Path
+):
+  # Multiple data_dirs are registered
+  file_utils.add_data_dir(other_data_dir_root)
+  # No data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET, config=None, version=_VERSION, data_dir=None
+  )
+  # -> use default data_dir
+  assert data_dir_root == default_data_dir_root
+
+
+def test_get_data_dir_root_multi_dir_old_version_exists(
+    default_data_dir_root: epath.Path, other_data_dir_root: epath.Path
+):
+  # Multiple data_dirs are registered
+  file_utils.add_data_dir(other_data_dir_root)
+  # Data dir contains old versions
+  _create_data_dir(version='0.1.0', data_dir_root=other_data_dir_root)
+  _create_data_dir(version='0.2.0', data_dir_root=other_data_dir_root)
+  # No data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET, config=None, version=_VERSION, data_dir=None
+  )
+  # -> use default data_dir
+  assert data_dir_root == default_data_dir_root
+
+
+def test_get_data_dir_root_multi_dir_version_exists(
+    other_data_dir_root: epath.Path,
+):
+  # Multiple data_dirs are registered
+  file_utils.add_data_dir(other_data_dir_root)
+  # Data found
+  _create_data_dir(data_dir_root=other_data_dir_root)
+  # No data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET, config=None, version=_VERSION, data_dir=None
+  )
+  # -> use existing data
+  assert data_dir_root == other_data_dir_root
+
+
+def test_get_data_dir_root_multi_dir_explicit(
+    default_data_dir_root: epath.Path, other_data_dir_root: epath.Path
+):
+  # Multiple data_dirs are registered
+  file_utils.add_data_dir(other_data_dir_root)
+  # Two data dirs contain the same version
+  _create_data_dir(data_dir_root=default_data_dir_root)
+  _create_data_dir(data_dir_root=other_data_dir_root)
+  # data_dir is passed
+  data_dir_root = file_utils.get_data_dir_root(
+      dataset=_DATASET,
+      config=None,
+      version=_VERSION,
+      data_dir=other_data_dir_root,
+  )
+  # -> use data_dir
+  assert data_dir_root == other_data_dir_root
+
+
+def test_get_data_dir_root_raises(default_data_dir_root: epath.Path):
+  # If two data dirs contains the dataset, raise an error...
+  other_data_dir_root = default_data_dir_root.parent / 'other_data_dir'
+  file_utils.add_data_dir(other_data_dir_root)
+
+  for data_dir_root in [default_data_dir_root, other_data_dir_root]:
+    file_utils.get_data_dir(
+        dataset=_DATASET,
+        config=None,
+        version=_VERSION,
+        data_dir_root=data_dir_root,
+    ).mkdir(parents=True, exist_ok=True)
+
+  with pytest.raises(ValueError, match='found in more than one directory'):
+    file_utils.get_data_dir_root(
+        dataset=_DATASET, config=None, version=_VERSION, data_dir=None
+    )
 
 
 def test_list_dataset_variants_with_configs(mock_fs: testing.MockFs):

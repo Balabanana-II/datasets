@@ -1129,73 +1129,30 @@ class DatasetBuilder(registered.RegisteredDataset):
     # If the dataset satisfy all the right conditions, activate autocaching.
     return True
 
-  def _relative_data_dir(self, with_version: bool = True) -> str:
-    """Relative path of this dataset in data_dir."""
-    builder_data_dir = self.name
-    builder_config = self._builder_config
-    if builder_config:
-      builder_data_dir = os.path.join(builder_data_dir, builder_config.name)
-    if not with_version:
-      return builder_data_dir
-
-    version_data_dir = os.path.join(builder_data_dir, str(self._version))
-    return version_data_dir
-
-  def _build_data_dir(self, given_data_dir: Optional[str]):
+  def _build_data_dir(self, given_data_dir: str | None) -> tuple[str, str]:
     """Return the data directory for the current version.
 
     Args:
-      given_data_dir: `Optional[str]`, root `data_dir` passed as `__init__`
-        argument.
+      given_data_dir: Root `data_dir` passed as `__init__` argument.
 
     Returns:
-      data_dir_root: `str`, The root dir containing all datasets, downloads,...
-      data_dir: `str`, The version data_dir
-        (e.g. `<data_dir_root>/<ds_name>/<config>/<version>`)
+      data_dir_root: Root directory containing all datasets, downloads,...
+      data_dir: Version data directory (e.g.
+      `<data_dir_root>/<ds_name>/<config>/<version>`)
     """
-    builder_dir = self._relative_data_dir(with_version=False)
-    version_dir = self._relative_data_dir(with_version=True)
-
-    default_data_dir = file_utils.get_default_data_dir(
-        given_data_dir=given_data_dir
+    data_dir_root = file_utils.get_data_dir_root(
+        dataset=self.name,
+        config=self.builder_config_name,
+        version=self.version,
+        data_dir=given_data_dir,
     )
-    all_data_dirs = file_utils.list_data_dirs(given_data_dir=given_data_dir)
-
-    all_versions = set()
-    requested_version_dirs = {}
-    for data_dir_root in all_data_dirs:
-      # List all existing versions
-      full_builder_dir = os.path.join(data_dir_root, builder_dir)
-      data_dir_versions = set(utils.version.list_all_versions(full_builder_dir))
-      # Check for existence of the requested version
-      if self.version in data_dir_versions:
-        requested_version_dirs[data_dir_root] = os.path.join(
-            data_dir_root, version_dir
-        )
-      all_versions.update(data_dir_versions)
-
-    if len(requested_version_dirs) > 1:
-      raise ValueError(
-          "Dataset was found in more than one directory: {}. Please resolve "
-          "the ambiguity by explicitly specifying `data_dir=`."
-          "".format(requested_version_dirs.values())
-      )
-    elif len(requested_version_dirs) == 1:  # The dataset is found once
-      return next(iter(requested_version_dirs.items()))
-
-    # No dataset found, use default directory
-    data_dir = os.path.join(default_data_dir, version_dir)
-    if all_versions:
-      logging.warning(
-          (
-              "Found a different version of the requested dataset:\n"
-              "%s\n"
-              "Using %s instead."
-          ),
-          "\n".join(str(v) for v in sorted(all_versions)),
-          data_dir,
-      )
-    return default_data_dir, data_dir
+    data_dir = file_utils.get_data_dir(
+        dataset=self.name,
+        config=self.builder_config_name,
+        version=self.version,
+        data_dir_root=data_dir_root,
+    )
+    return os.fspath(data_dir_root), os.fspath(data_dir)
 
   def _log_download_done(self) -> None:
     msg = (

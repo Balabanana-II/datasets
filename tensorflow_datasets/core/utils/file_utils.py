@@ -43,7 +43,7 @@ PathLike = epath.PathLike
 ListOrElem = type_utils.ListOrElem
 Path = epath.Path
 
-_registered_data_dir = set()
+_registered_data_dir: set[Path] = set()
 _GLOB_CHARS = ['*', '?', '[']
 
 
@@ -79,7 +79,7 @@ def as_path(path: PathLike) -> Path:
   return epath.Path(path)
 
 
-def add_data_dir(data_dir):
+def add_data_dir(data_dir: PathLike) -> None:
   """Registers a new default `data_dir` to search for datasets.
 
   When a `tfds.core.DatasetBuilder` is created with `data_dir=None`, TFDS
@@ -94,10 +94,7 @@ def add_data_dir(data_dir):
   Args:
     data_dir: New data_dir to register.
   """
-  # Remove trailing / to avoid same directory being included twice in the set
-  # with and without a final slash.
-  data_dir = data_dir.rstrip('/')
-  _registered_data_dir.add(data_dir)
+  _registered_data_dir.add(epath.Path(data_dir))
 
 
 def _get_incomplete_dir(dir_name: str) -> str:
@@ -128,7 +125,7 @@ def incomplete_dir(
 
 def list_data_dirs(
     given_data_dir: ListOrElem[PathLike] | None = None,
-) -> Sequence[PathLike]:
+) -> list[PathLike]:
   """Return the list of all `data_dir` to look-up.
 
   Args:
@@ -148,17 +145,110 @@ def list_data_dirs(
   else:
     default_data_dir = get_default_data_dir(given_data_dir=given_data_dir)
     all_data_dirs = _registered_data_dir | {default_data_dir}
-    return sorted(os.path.expanduser(d) for d in all_data_dirs)
+    return sorted(d.expanduser() for d in all_data_dirs)
 
 
-def get_default_data_dir(given_data_dir: str | None = None) -> str:
+def get_default_data_dir(given_data_dir: str | None = None) -> Path:
   """Returns the default data_dir."""
   if given_data_dir:
-    return os.path.expanduser(given_data_dir)
+    data_dir = os.path.expanduser(given_data_dir)
   elif 'TFDS_DATA_DIR' in os.environ:
-    return os.environ['TFDS_DATA_DIR']
+    data_dir = os.environ['TFDS_DATA_DIR']
   else:
-    return constants.DATA_DIR
+    data_dir = constants.DATA_DIR
+
+  return Path(data_dir)
+
+
+def get_data_dir(
+    dataset: str,
+    config: str | None,
+    version: version_lib.Version | str | None,
+    data_dir_root: epath.PathLike | None,
+) -> epath.Path:
+  """Returns the data directory for the given dataset."""
+  if not data_dir_root:
+    data_dir_root = get_data_dir_root(
+        dataset=dataset,
+        config=config,
+        version=version,
+        data_dir=None,
+    )
+  data_dir = epath.Path(data_dir_root) / dataset
+  if config:
+    data_dir = data_dir / config
+  if version:
+    data_dir = data_dir / str(version)
+  return data_dir
+
+
+def get_data_dir_root(
+    dataset: str,
+    config: str | None,
+    version: version_lib.Version | str,
+    data_dir: epath.PathLike | None,
+) -> epath.Path:
+  """Return the root directory containing all datasets, downloads,...
+
+  Args:
+    dataset: Name of the dataset.
+    config: Name of the config.
+    version: Version of the dataset.
+    data_dir: Root `data_dir` passed as `__init__` argument.
+  """
+  default_data_dir_root = get_default_data_dir(given_data_dir=data_dir)
+  all_data_dir_roots = list_data_dirs(given_data_dir=data_dir)
+
+  all_builder_versions: list[version_lib.Version] = []
+  data_dir_by_data_dir_root: dict[PathLike, Path] = {}
+
+  for data_dir_root in all_data_dir_roots:
+    # List all existing versions
+    builder_dir = get_data_dir(
+        dataset=dataset,
+        config=config,
+        version=None,
+        data_dir_root=data_dir_root,
+    )
+    builder_versions = version_lib.list_all_versions(builder_dir)
+    # Check for existence of the requested version
+    if version in builder_versions:
+      data_dir_by_data_dir_root[data_dir_root] = get_data_dir(
+          dataset=dataset,
+          config=config,
+          version=version,
+          data_dir_root=data_dir_root,
+      )
+    all_builder_versions.extend(builder_versions)
+
+  if len(data_dir_by_data_dir_root) > 1:
+    raise ValueError(
+        'Dataset was found in more than one directory:'
+        f' {data_dir_by_data_dir_root.values()}. Please resolve the ambiguity'
+        ' by explicitly specifying `data_dir=`.'
+    )
+  elif len(data_dir_by_data_dir_root) == 1:
+    # The dataset is found once
+    return Path(list(data_dir_by_data_dir_root.keys())[0])
+
+  # No dataset found, use default directory
+  if all_builder_versions:
+    data_dir = get_data_dir(
+        dataset=dataset,
+        config=config,
+        version=version,
+        data_dir_root=default_data_dir_root,
+    )
+    logging.warning(
+        (
+            'Found a different version of the requested dataset:\n'
+            '%s\n'
+            'Using %s instead.'
+        ),
+        '\n'.join(str(v) for v in sorted(all_builder_versions)),
+        data_dir,
+    )
+  return default_data_dir_root
 
 
 def _looks_like_a_tfds_file(filename: str) -> bool:
